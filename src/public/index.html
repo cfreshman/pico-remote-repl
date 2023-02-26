@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>pico-remote-repl</title>
+  <link rel="icon" href="/icon.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8">
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: system-ui;
+      display: flex; flex-direction: column;
+    }
+    body {
+      padding: .5em;
+    }
+    button, label {
+      display: inline-flex;
+      align-items: center;
+      font-size: .8em;
+      cursor: pointer;
+      user-select: none;
+    }
+    *:is(button, label) input[type=checkbox] {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <div style="position:relative">
+    <b>pico-remote-repl</b>&nbsp;&nbsp;<i>run MicroPython remotely</i> 
+    <span style="position:absolute;right:0;bottom:.1em;font-size:.85em">[ <a style="color:#ff8686" href="/portal">back to network selection</a> ]</span>
+  </div>
+
+  <textarea
+  id="input"
+  style="
+  font-family: monospace;
+  flex-grow: 1;
+  "
+  onkeydown="
+  if (event.key === 'Enter') {
+    if (event.shiftKey) {
+      event.preventDefault()
+      localStorage.setItem(PREV_KEY, input.value)
+      command(input.value)
+      return
+    }
+
+    const cursor = event.target.selectionStart
+    let start = cursor
+    let text = event.target.value
+    while (start && text[start] !== '\n') start -= 1
+    const line = text.slice(start, cursor)
+    if (line.trim()) {
+      event.preventDefault()
+      const indentMatch = /^\s*/.exec(line)
+      const colonMatch = /:\s*$/.exec(line)
+      const indent = (indentMatch[0] || '\n') + (colonMatch ? '  ' : '')
+      text = text.slice(0, cursor) + indent + text.slice(cursor)
+      console.debug('INDENT', cursor, start, {
+        line, indent, text
+      })
+      event.target.value = text
+      event.target.selectionStart = cursor + indent.length
+    }
+  } else if (event.key === 'Tab' && !event.metaKey) {
+    event.preventDefault()
+    const L = event.target
+    const text = L.value
+    // indent from start of each selected line
+    let start = L.selectionStart, end = L.selectionEnd
+    const untab = event.shiftKey
+    let i = Math.max(0, start - 1)
+    while (i && text[i] !== '\n') i -= 1
+    start = text[i] === '\n' ? i + 1 : i
+    let indented = text.slice(0, i)
+    console.debug(i, L.selectionStart, L.selectionEnd, text, indented)
+    for (; i <= L.selectionEnd; i++) {
+      if (!i) {
+        if (untab) for (let j = 0; j < 2 && text[i] === ' '; i++, j++) {}
+        else indented += '  '
+      }
+      if (text[i]) indented += text[i]
+      console.debug(i, text[i], indented, text[i] === '\n')
+      if (text[i] === '\n') {
+        i += 1
+        if (untab) for (let j = 0; j < 2 && text[i] === ' '; i++, j++) {}
+        else indented += '  '
+        i -= 1
+      }
+    }
+    indented += text.slice(i)
+    L.value = indented
+    L.selectionEnd = Math.max(start, end + (indented.length - text.length))
+    L.selectionStart = start === end ? L.selectionEnd : start
+  }
+  "></textarea>
+  <div style="position:relative">
+    <button onclick="
+    localStorage.setItem(PREV_KEY, input.value)
+    command(input.value)
+    ">run</button>
+    <button onclick="
+    if (input.value) {
+      localStorage.setItem(PREV_KEY, input.value)
+      input.value = ''
+    }
+    // action('clear')
+    ">clear</button>
+    <button onclick="
+    input.value = localStorage.getItem(PREV_KEY) || ''
+    // action('previous')
+    ">previous</button>
+    <div style="
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    ">
+      <label>
+        wrap&nbsp;&nbsp;<input
+        type="checkbox"
+        checked="true"
+        onchange="
+        output.style.whiteSpace = event.target.checked ? 'pre-wrap' : 'pre'
+        " />
+      </label>
+    </div>
+  </div>
+  <div
+  id="output"
+  style="
+  background: black; color: white;
+  border: 0;
+  font-family: monospace;
+  white-space: pre-wrap;
+  height: 0;
+  flex-grow: 1;
+  padding: .25em;
+  padding-bottom: 0;
+  margin-top: .25em;
+  display: flex; flex-direction: column;
+  overflow: auto;
+  line-height: 1.1em;
+  ">
+    <p
+    tabindex="0"
+    onclick="
+    output_input.focus()
+    "
+    style="
+    margin: 0;
+    font-size: 1em;
+    line-height: inherit;
+    "></p>
+    <textarea
+    style="
+    -webkit-appearance: none;
+    background: inherit; color: inherit; border: 0;
+    flex-grow: 1;
+    outline: 0;
+    padding: 0;
+    padding-bottom: .5em;
+    min-height: 1em;
+    font-size: 1em;
+    line-height: inherit;
+    "
+    onfocus="
+    event.target.selectionStart = event.target.value.length
+    "
+    oninput="
+    event.target.value = event.target.value
+      .split('\n')
+      .map((x,i) => ((i ? '| ' : '$ ')+x).replace(/^([$|] )+/, '$1'))
+      .join('\n')
+    event.target.style.minHeight = `${event.target.value.split('\n').length * 1.1 + .5}em`
+    setTimeout(() => output.scrollTop = output.scrollHeight)
+    "
+    onkeydown="
+    let start = event.target.selectionStart
+    for (let i = 0; i < 3; i++, start--) {
+      if (start <= 0) {
+        event.target.selectionStart = 2
+        if (event.key === 'Backspace') {
+          if (event.target.selectionEnd === event.target.selectionStart) {
+            return event.preventDefault()
+          }
+        }
+        break
+      }
+      if (event.target.value[start - 1] === '\n') {
+        if (event.key === 'Backspace') {
+          event.target.selectionStart = start - 1
+        } else {
+          event.target.selectionStart = start + 2
+        }
+        break
+      }
+    }
+
+    const input = event.target.value
+      .split('\n')
+      .map(x => x.replace(/^([$|] )+/, ''))
+      .join('\n')
+    history[history_index] = input
+    if (event.key === 'Enter') {
+      if (event.shiftKey) {
+        const cursor = event.target.selectionStart
+        let start = cursor
+        
+        let text = event.target.value
+        while (start && text[start] !== '\n') start -= 1
+        const line = text.slice(start + 1, cursor).replace(/^\| /, '')
+        if (line.trim()) {
+          event.preventDefault()
+          const indentMatch = /^\s*/.exec(line)
+          const colonMatch = /:\s*$/.exec(line)
+          const indent = '\n| ' + (indentMatch[0] || '') + (colonMatch ? '  ' : '')
+          text = text.slice(0, cursor) + indent + text.slice(cursor)
+          console.debug('INDENT', cursor, start, {
+            line, indent, text
+          })
+          event.target.value = text
+          event.target.selectionStart = cursor + indent.length
+        }
+      } else {
+        event.preventDefault()
+        log(
+          trim_newlines(event.target.value)
+            .split('\n')
+            .map((x,i) => ((i ? '| ' : '$ ')+x).replace(/^([$|] )+/, '$1'))
+            .join('\n'),
+          waiting=true)
+        logged(`/repl?${new URLSearchParams({
+          command: encodeURIComponent(input)
+        }).toString()}`)
+        history_index = 0
+        history[0] = input
+        history.unshift('')
+      }
+    } else if (event.key === 'ArrowUp') {
+      if (history_index < history.length - 1) {
+        history_index += 1
+        event.target.value = event.target.value.slice(0, 2) + history[history_index]
+        setTimeout(() => event.target.selectionStart = event.target.value.length)
+      }
+    } else if (event.key === 'ArrowDown') {
+      if (history_index) {
+        history_index -= 1
+        event.target.value = event.target.value.slice(0, 2) + history[history_index]
+        setTimeout(() => event.target.selectionStart = event.target.value.length)
+      }
+    }
+    console.debug('HEIGHT', `${event.target.value.split('\n').length}em`)
+    event.target.style.minHeight = `${event.target.value.split('\n').length * 1.1 + .5}em`
+    setTimeout(() => output.scrollTop = output.scrollHeight)
+
+    "
+    ></textarea>
+  </div>
+  <script>
+    const PREV_KEY = 'repl-previous'
+    const input = document.querySelector('#input')
+    const logs = [{
+      text: 'pico-fi-repl 1.0',
+    }]
+    const output = document.querySelector('#output')
+    const output_text = output.querySelector('p')
+    const output_input = output.querySelector('textarea')
+    const trim_newlines = text => {
+      return text?.replace(/^((\$ )? *\n)+/, '').replace(/((\| )? *\n?)+$/, '')
+    }
+    const log = (item, waiting=false) => {
+      const scrolled = Math.abs((output.scrollTop + output.clientHeight) - output.scrollHeight) < 16
+      console.debug(scrolled, output.scrollTop, output.clientHeight, output.scrollHeight)
+      item && logs.push(item)
+      console.debug('LOG', { item, waiting, logs })
+      if (waiting) logs.push({ html: '<span style="opacity:.5">(waiting)</span>', waiting })
+      else if (logs.find(x => x.waiting)) logs.splice(logs.findIndex(x => x.waiting), 1)
+      const _node = document.createElement('div')
+      const node = html => {
+        _node.innerHTML = `<div>${html}</div>`
+        return _node.children[0]
+      }
+      const elements = logs
+        .map(x => {
+          if (x instanceof Error || (x?.includes && x.includes('error:'))) {
+            return node(`<span style="color:#f11">${x.toString()}</span>`)
+          } else if (x && (typeof x === 'string' || x.text)) {
+            return trim_newlines(x.text || x) + '\n'
+          } else if (x && x.html) {
+            return node(x.html)
+          } else if (x && JSON.stringify(x) !== '{}') {
+            return JSON.stringify(x)
+          } else {
+            logs.splice(logs.indexOf(x), 1)
+          }
+        })
+        .filter(x => x)
+      console.debug(logs, elements)
+      output_text.innerHTML = ''
+      output_text.append(...elements)
+      console.debug('REPLACE INPUT WITH (WAITING)?', waiting)
+      output_input.value = waiting ? '' : '$ '
+      if (scrolled) output.scrollTop = output.scrollHeight
+    }
+    const action = (name=false, detail=false, expanded=false, waiting=false) => {
+      // detail = detail &&
+      //   trim_newlines(detail)
+      //   .split('\n')
+      //   .map((x,i,a) => (!i ? '$ ' : '| ') + x)
+      //   .join('\n') + '\n'
+      detail = detail &&
+        trim_newlines(detail)
+        .split('\n')
+        .map((x,i) => ((i ? '| ' : '$ ')+x).replace(/^([$|] )+/, '$1'))
+        .join('\n')
+      
+      console.debug('ACTION', { name, detail, expanded, waiting })
+      
+      // log(expanded ? detail : {
+      //   action: name || 'empty',
+      //   html: `<span style="color:gold">${board_name ? '/'+board_name : '<i>unable to connect</i>'}</span> <span style="color:gray">${new Date().toLocaleTimeString([], { hour12: false })}</span>${name?' '+name:''}${detail ? ` <span style="
+      //   text-decoration: underline;
+      //   cursor: pointer;
+      //   "
+      //   onclick="
+      //   console.debug(event.target.dataset.open, \`${detail}\`)
+      //   event.target.dataset.open = !JSON.parse(event.target.dataset.open || 'false')
+      //   if (JSON.parse(event.target.dataset.open)) {
+      //     event.target.textContent = '[hide]'
+      //     event.target.nextElementSibling.textContent = \`\n${detail}\`
+      //   } else {
+      //     event.target.textContent = '[show]'
+      //     event.target.nextElementSibling.textContent = ''
+      //   }
+      //   ">[show]</span><span class="show"style="cursor:default"></span>` : ''}`
+      // })
+      log(!name ? {
+        html: `<span style="color:gold">${board_name ? '/'+board_name : '<i>unable to connect</i>'}</span> <span style="color:gray">${new Date().toLocaleTimeString([], { hour12: false })}</span>`
+      } : (expanded ? { html: `<span style="color:#8df">${detail}</span>` } : {
+        action: name || 'empty',
+        html: `${name?'> '+name:''}${detail ? ` <span style="
+        text-decoration: underline;
+        cursor: pointer;
+        "
+        onclick="
+        console.debug(event.target.dataset.open, \`${detail}\`)
+        event.target.dataset.open = !JSON.parse(event.target.dataset.open || 'false')
+        if (JSON.parse(event.target.dataset.open)) {
+          event.target.textContent = '[hide]'
+          event.target.nextElementSibling.innerHTML = \`\n${detail}\`
+        } else {
+          event.target.textContent = '[show]'
+          event.target.nextElementSibling.textContent = ''
+        }
+        ">[show]</span><span class="show" style="cursor:default;color:#8df"></span>` : ''}`
+      }))
+
+      // const empty_reverse = logs.slice().reverse().findIndex(x => x?.action === 'empty')
+      // console.debug('EMPTY', empty_reverse, logs[logs.length - 1 - empty_reverse], logs)
+      // if (empty_reverse > 0) {
+      //   const empty = logs.length - 1 - empty_reverse
+      //   if (logs[empty + 1]?.action) {
+      //     logs.splice(empty, 1)
+      //     if (!waiting) action()
+      //   }
+      // }
+
+      if (waiting) log(false, waiting)
+    }
+    let i = 0
+    const logged = async url => {
+      console.debug('LOGGED', url)
+      try {
+        return fetch(url)
+        .then(res => res.text())
+        .then(text => {
+          console.debug('repl', text)
+          // always parse board.py contents for new name
+          const board_name_match = /name = "([^"]+)"/m.exec(text)
+          if (board_name_match) board_name = board_name_match[1]
+          log(text || { html: `<span style="opacity:.5">(no output)</span>` })
+          return text
+        })
+        .catch(async error => {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          log(error)
+          return Promise.resolve('')
+        })
+        .finally(() => {
+          action()
+        })
+      } catch (error) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        log(error)
+        return Promise.resolve('')
+      }
+    }
+    const command = (text, expanded=false) => {
+      console.debug('COMMAND', { text, expanded })
+      action('run', text, expanded, true)
+      return logged(`/repl?${new URLSearchParams({
+        command: encodeURIComponent(text)
+      }).toString()}`)
+    }
+    
+    input.value = localStorage.getItem(PREV_KEY) || ''
+    const history = []
+    let history_index = 0
+
+    let board_name = undefined
+    command(`
+try:
+  with open('board.py') as f: print(f.read())
+except: print('name = "pyboard"')
+import os
+print(os.uname())`, true)
+  </script>
+
+</body>
+</html>

@@ -1,3 +1,6 @@
+**This has been moved under [pico-fi](https://freshman.dev/git:pico-fi) → [packs/remote-repl](https://freshman.dev/git:pico-fi/tree/master/src/packs/remote-repl/__init__.py)**
+
+
 ## pico-remote-repl
 
 Run MicroPython commands on your Pico W, wirelessly
